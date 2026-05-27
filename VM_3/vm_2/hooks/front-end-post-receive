@@ -1,0 +1,5 @@
+#!/bin/bash
+echo "[HOOK] Push received on front-end repo"
+ssh -i /data/git/.ssh/deploy_key -o StrictHostKeyChecking=no \
+    sysadmin@192.168.56.101 "sudo /home/service-web/deploy-front.sh"
+echo "[HOOK] Frontend deployment triggered!"
