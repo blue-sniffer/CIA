@@ -1,0 +1,9 @@
+FROM centos:centos7.2.1511
+RUN yum install -y git gcc make
+RUN groupadd nogroup
+RUN cd /tmp ; git clone https://github.com/proftpd/proftpd.git ; cd proftpd ; git checkout 765e161d548d46ceefe69dfc33ae556f0030056e ; ./configure --with-modules=mod_ratio ; make ; make install
+RUN mkdir -p /usr/share/nginx/html
+RUN bash -c "usermod -u 997 -g 996 nobody"
+COPY proftpd.conf /usr/local/etc/proftpd.conf
+EXPOSE 21
+ENTRYPOINT ["proftpd", "-n"]
