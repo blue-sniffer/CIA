@@ -1,0 +1,158 @@
+name: Deploy To EC2
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ec2-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
+          API_BIND_IP: ${{ secrets.API_BIND_IP }}
+          FRONT_BIND_IP: ${{ secrets.FRONT_BIND_IP }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER || 'ec2-user' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          timeout: 120s
+          command_timeout: 45m
+          debug: true
+          envs: REACT_APP_API_URL,API_BIND_IP,FRONT_BIND_IP
+          script: |
+            set -euo pipefail
+            DEPLOY_ROOT="${{ secrets.EC2_DEPLOY_PATH || '/opt/CIA' }}"
+            APP_DIR="$DEPLOY_ROOT/repo"
+
+            sudo mkdir -p "$DEPLOY_ROOT"
+            sudo chown -R "$(whoami):$(whoami)" "$DEPLOY_ROOT"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            TARGET_SHA="${{ github.sha }}"
+            PREV_SHA_FILE="$DEPLOY_ROOT/.last_deployed_sha"
+            PREV_SHA=""
+            if [ -f "$PREV_SHA_FILE" ]; then
+              PREV_SHA="$(cat "$PREV_SHA_FILE")"
+            fi
+
+            git fetch origin
+            git checkout "${{ github.ref_name }}"
+            git reset --hard "$TARGET_SHA"
+
+            CHANGED_FILES=""
+            if [ -n "$PREV_SHA" ] && git cat-file -e "$PREV_SHA^{commit}" 2>/dev/null; then
+              CHANGED_FILES="$(git diff --name-only "$PREV_SHA" "$TARGET_SHA" || true)"
+            else
+              CHANGED_FILES="$(git ls-files)"
+            fi
+
+            if ! swapon --show | grep -q '/swapfile'; then
+              if [ ! -f /swapfile ]; then
+                if command -v fallocate >/dev/null 2>&1; then
+                  sudo fallocate -l 2G /swapfile
+                else
+                  sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+                fi
+                sudo chmod 600 /swapfile
+                sudo mkswap /swapfile
+              fi
+              sudo swapon /swapfile || true
+            fi
+
+            free -h
+
+            DOCKER_CMD="docker"
+            if ! docker info >/dev/null 2>&1; then
+              DOCKER_CMD="sudo docker"
+            fi
+
+            if ! $DOCKER_CMD compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+              if ! command -v curl >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y curl
+              fi
+
+              ARCH="$(uname -m)"
+              if [ "$ARCH" = "x86_64" ]; then
+                COMPOSE_ARCH="x86_64"
+              elif [ "$ARCH" = "aarch64" ]; then
+                COMPOSE_ARCH="aarch64"
+              else
+                echo "Unsupported architecture for docker-compose: $ARCH"
+                exit 1
+              fi
+
+              sudo curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${COMPOSE_ARCH}" -o /usr/local/bin/docker-compose
+              sudo chmod +x /usr/local/bin/docker-compose
+            fi
+
+            if $DOCKER_CMD compose version >/dev/null 2>&1; then
+              COMPOSE_CMD="$DOCKER_CMD compose"
+            else
+              if command -v docker-compose >/dev/null 2>&1; then
+                if [ "$DOCKER_CMD" = "sudo docker" ]; then
+                  COMPOSE_CMD="sudo docker-compose"
+                else
+                  COMPOSE_CMD="docker-compose"
+                fi
+              else
+                echo "Docker Compose is not available"
+                exit 1
+              fi
+            fi
+
+            export API_BIND_IP="${API_BIND_IP:-0.0.0.0}"
+            export FRONT_BIND_IP="${FRONT_BIND_IP:-0.0.0.0}"
+            export REACT_APP_API_URL="${REACT_APP_API_URL:-localhost:3000}"
+
+            if echo "$CHANGED_FILES" | grep -q '^back_student/'; then
+              echo "Backend changed, rebuilding backend stack"
+              $COMPOSE_CMD -f back_student/docker-compose.yml up -d --build
+            else
+              echo "Backend unchanged, starting without rebuild"
+              $COMPOSE_CMD -f back_student/docker-compose.yml up -d
+            fi
+
+            if echo "$CHANGED_FILES" | grep -q '^front_student/'; then
+              echo "Frontend changed, rebuilding frontend stack"
+              $COMPOSE_CMD -f front_student/docker-compose.yml up -d --build
+            else
+              echo "Frontend unchanged, starting without rebuild"
+              $COMPOSE_CMD -f front_student/docker-compose.yml up -d
+            fi
+
+            $COMPOSE_CMD -f back_student/docker-compose.yml ps
+            $COMPOSE_CMD -f front_student/docker-compose.yml ps
+
+            echo "Waiting for backend to be ready (DB init takes time)..."
+            for i in $(seq 1 12); do
+              if curl -fsS --max-time 10 "http://localhost:3000/product" >/dev/null 2>&1; then
+                echo "Backend is up"
+                break
+              fi
+              echo "  attempt $i/12 - waiting 10s..."
+              sleep 10
+            done
+            curl -fsS --max-time 10 "http://localhost:3000/product" >/dev/null || echo "WARNING: backend health check failed, containers may still be starting"
+
+            curl -fsS --max-time 10 "http://localhost:8080" >/dev/null || echo "WARNING: frontend health check failed"
+
+            echo "$TARGET_SHA" > "$PREV_SHA_FILE"
