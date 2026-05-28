@@ -47,6 +47,7 @@ jobs:
             fi
 
             cd "$APP_DIR"
+            git remote set-url origin "https://github.com/${{ github.repository }}.git"
             TARGET_SHA="${{ github.sha }}"
             PREV_SHA_FILE="$DEPLOY_ROOT/.last_deployed_sha"
             PREV_SHA=""

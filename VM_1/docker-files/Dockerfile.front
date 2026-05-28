@@ -1,0 +1,13 @@
+FROM mhart/alpine-node:11 AS builder
+WORKDIR /app
+COPY . .
+RUN yarn install
+RUN yarn build
+FROM mhart/alpine-node
+RUN yarn global add serve
+RUN adduser -D service-web
+WORKDIR /app
+COPY --from=builder /app/build .
+RUN chown -R service-web:service-web /app
+USER service-web
+CMD ["serve", "-p", "8080", "-s", "."]

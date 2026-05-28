@@ -1,0 +1,5 @@
+#!/bin/bash
+echo "[HOOK] Push received on back-end repo"
+ssh -i /data/git/.ssh/deploy_key -o StrictHostKeyChecking=no \
+    sysadmin@192.168.56.103 "sudo /home/service-web/deploy-back.sh"
+echo "[HOOK] Backend deployment triggered!"
