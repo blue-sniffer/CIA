@@ -25,6 +25,7 @@ jobs:
           REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
           API_BIND_IP: ${{ secrets.API_BIND_IP }}
           FRONT_BIND_IP: ${{ secrets.FRONT_BIND_IP }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER || 'ec2-user' }}
@@ -33,7 +34,7 @@ jobs:
           timeout: 120s
           command_timeout: 45m
           debug: true
-          envs: REACT_APP_API_URL,API_BIND_IP,FRONT_BIND_IP
+          envs: REACT_APP_API_URL,API_BIND_IP,FRONT_BIND_IP,GITHUB_TOKEN
           script: |
             set -euo pipefail
             DEPLOY_ROOT="${{ secrets.EC2_DEPLOY_PATH || '/opt/CIA_WEB' }}"
@@ -43,11 +44,11 @@ jobs:
             sudo chown -R "$(whoami):$(whoami)" "$DEPLOY_ROOT"
 
             if [ ! -d "$APP_DIR/.git" ]; then
-              git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
+              git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" "$APP_DIR"
             fi
 
             cd "$APP_DIR"
-            git remote set-url origin "https://github.com/${{ github.repository }}.git"
+            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
             TARGET_SHA="${{ github.sha }}"
             PREV_SHA_FILE="$DEPLOY_ROOT/.last_deployed_sha"
             PREV_SHA=""
